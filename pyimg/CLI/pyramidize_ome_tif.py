@@ -18,6 +18,11 @@ try:
 except ImportError:
     from skimage.util.dtype import convert as dtype_convert
 
+import dask.array as da
+from dask_image import imread
+
+
+
 # TODO pixelsize optional
 # TODO report it is working before starting the process
 # TODO what if dtype is not uint16?
@@ -45,25 +50,9 @@ def get_args():
 
 def load_image_into_array(path_to_image):
     """ Load image into numpy array"""
-    try:
-        if path_to_image.endswith(".czi"):
-            logger.info(f"Reading CZI file with shape {czifile.CziFile(path_to_image).shape}")
-            time_st = time.time()
-            image = np.squeeze(czifile.imread(path_to_image).astype("uint16"))
-            logger.info(f"Loaded image in {time.time() - time_st:.1f} seconds")
-        else:
-            image = tifffile.imread(path_to_image).astype("uint16")
-        logger.info(f"Image stored as array with shape: {image.shape}, and dtype: {image.dtype}")
-        return image
-    except FileNotFoundError:
-        logger.error(f"File not found: {path_to_image}")
-        sys.exit(1)
-    except MemoryError:
-        logger.error("Memory error while loading image, probably more RAM needed")
-        sys.exit(1)
-    except Exception as err:
-        logger.error(f"Error loading image: {err}")
-        sys.exit(1)
+    image = imread.imread(path_to_image)
+    logger.info(f"Image stored as {type(image)} with shape: {image.shape}, and dtype: {image.dtype}")
+    return image
 
 def create_metadata(pixel_size):
     """
@@ -110,7 +99,7 @@ def set_parameters_from_image(image, tile_size=1072):
 
     return image_parameters
 
-def tile_generator_lowres(level, level_full_shapes, tile_shapes, outpath, scale):
+def tile_generator_lowres(level, level_full_shapes, tile_shapes, path_to_tiff, scale):
     """
     Generate tiles for lower resolution levels
     tiffwriter takes in generator and writes to file
@@ -127,7 +116,7 @@ def tile_generator_lowres(level, level_full_shapes, tile_shapes, outpath, scale)
     num_channels, h, w = level_full_shapes[level]
     tileshape = tile_shapes[level] or (h, w)
     #read tiff with level 0 (highest res)
-    tiff = tifffile.TiffFile(outpath)
+    tiff = tifffile.TiffFile(path_to_tiff)
     zarrImage = zarr.open(tiff.aszarr(series=0, level=level - 1, squeeze=False))
     #generate tiles
     for channel in range(num_channels):
@@ -138,6 +127,7 @@ def tile_generator_lowres(level, level_full_shapes, tile_shapes, outpath, scale)
     
         for y in range(0, zarrImage.shape[1], tileheight):        
             for x in range(0, zarrImage.shape[2], tilewidth):
+
                 a = zarrImage[channel, y : y + tileheight, x : x + tilewidth, 0]
                 a = skimage.transform.downscale_local_mean(a, (scale, scale))
                 if np.issubdtype(zarrImage.dtype, np.integer):
@@ -172,6 +162,7 @@ def main():
     image_parameters = set_parameters_from_image(image, tile_size=args.tile_size)
 
     with tifffile.TiffWriter(args.output, ome=True, bigtiff=True) as tiff:
+        
         # save image the highest resolution level
         tiff.write(
             data=image,
@@ -183,6 +174,7 @@ def main():
             resolutionunit='CENTIMETER',
             tile=image_parameters["tile_shapes"][0],
         )
+
         # create tiles for the rest of the levels
         for level, (shape, tile_shape) in enumerate(zip(image_parameters["cxy_shapes_all_levels"][1:], image_parameters["tile_shapes"][1:]), start=1):
             tiff.write(
@@ -192,6 +184,7 @@ def main():
                 dtype=image_parameters["dtype"],
                 tile=tile_shape,
             )
+    
     logger.info(f"Pyramid image saved to {args.output}")
 
 if __name__ == "__main__":

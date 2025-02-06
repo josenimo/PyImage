@@ -17,7 +17,9 @@ def get_args():
     inputs = parser.add_argument_group(title="Required Input", description="Path to required input file")
     inputs.add_argument("-i", "--input",        dest="input",       action="store", required=True, help="File path to input image.")
     inputs.add_argument("-o", "--output",       dest="output",      action="store", required=True, help="Path to output image.")
+    inputs.add_argument("-t", "--tile-size",    dest="tile_size",   action="store", type=int, default=1072, help="Tile size for pyramid generation (must be divisible by 16)")
     inputs.add_argument("-ll", "--log-level",   dest="loglevel",    default='INFO', choices=["DEBUG", "INFO"], help='Set the log level (default: INFO)')
+
     arg = parser.parse_args()
     arg.input = os.path.abspath(arg.input)
     arg.output = os.path.abspath(arg.output)
@@ -30,6 +32,8 @@ def check_inputs_paths(args):
     assert args.input.endswith(".tif"), "Input file must be a .tif file"
     #output
     assert args.output.endswith(".tif"), "Output file must be a .tif file"
+    #tilesize
+    assert args.tile_size % 16 == 0, "Tile size must be divisible by 16"
     #log level
     assert args.loglevel in ["DEBUG", "INFO"], "Log level must be either DEBUG or INFO"
 
@@ -41,7 +45,7 @@ def metadata_parse(img):
     omexml = omexml.tostring()
     return omexml
 
-def scale_channel_and_write(image_path, output_path):
+def scale_channel_and_write(image_path, output_path, tile_size=1072):
     image = imread.imread(image_path)
     logger.info(f"Image shape: {image.shape} ")
     assert image.ndim == 3, "Image must have 3 dimensions"
@@ -49,19 +53,43 @@ def scale_channel_and_write(image_path, output_path):
     logger.info(f"Estimated image size: {image.nbytes / 1e9:.4g} GB")
     omexml = metadata_parse(image)
 
+    # Calculate the number of subifds
+    subifds = (np.ceil(np.log2(max(1, max(image.shape[-2:]) / tile_size))) + 1).astype(int)
+
     with tifffile.TiffWriter(output_path, bigtiff=True) as tif:
+        
         for channel in range(image.shape[0]):
-            logger.info(f"      Processing channel {channel}")
+            logger.info(f"  Processing channel {channel}")
             channel_array = image[channel,:,:]
             channel_array = channel_array.astype(np.float32)
             channel_array = channel_array - channel_array.min().compute()
             channel_array = channel_array / channel_array.max().compute()
             channel_array = channel_array * np.iinfo(np.uint8).max
             channel_array = channel_array.astype(np.uint8)
-            logger.info(f"      Done processing channel {channel}")
-            tif.write(channel_array.compute(), description=omexml, contiguous=True)
+            logger.info(f"  Done processing channel {channel}")
+            
+            tif.write(
+                channel_array.compute(), 
+                description=omexml,
+                metadata=False,
+                subifds=subifds, 
+                tile=(tile_size, tile_size),
+                photometric='minisblack',
+                contiguous=True)
             omexml = None
-            logger.info(f"      Channel {channel} written to {output_path}")
+            logger.info(f"  Channel {channel} baselayer written to {output_path}")
+
+            for level in range(subifds):
+                logger.info(f"      Processing level {level} for channel {channel}")
+                res = 2**(level+1)
+                tif.write(
+                    channel_array[::res, ::res].compute(),
+                    subfiletype=1,
+                    metadata=False,
+                    tile=(tile_size, tile_size),
+                    photometric='minisblack')
+                logger.info(f"      Done writing level {level} for channel {channel}")
+
 
 def main():
     args = get_args()
@@ -69,7 +97,7 @@ def main():
     #logging setup
     logger.remove()
     logger.add(sys.stdout, format="<green>{time:HH:mm:ss.SS}</green> | <level>{level}</level> | {message}", level=args.loglevel.upper())
-    scale_channel_and_write(args.input, args.output)
+    scale_channel_and_write(args.input, args.output, tile_size=args.tile_size)
     
 if __name__ == "__main__":
     time_start = time.time()
