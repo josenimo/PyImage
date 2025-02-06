@@ -18,6 +18,10 @@ try:
 except ImportError:
     from skimage.util.dtype import convert as dtype_convert
 
+# TODO pixelsize optional
+# TODO report it is working before starting the process
+
+
 def get_args():
     """
     Get arguments from command line
@@ -205,4 +209,19 @@ python pyramidize.py \
 --output "/Jose_BI/resize/test_3.ome.tif" \
 --pixel-size 0.354 \
 --tile-size 1072 
+
+python pyramidize.py \
+--log-level "INFO" \
+--input "/Users/jnimoca/Jose_BI/1_Pipelines/openDVP/data/subset_elements/mIF.ome.tif" \
+--output "/Users/jnimoca/Jose_BI/1_Pipelines/openDVP/data/subset_elements/mIF_pyramid.ome.tif" \
+--pixel-size 0.354 \
+--tile-size 1072 
+
+
+python ./pyimg/CLI/pyramidize.py  \
+--log-level "INFO" \
+--input "/Volumes/Extreme SSD/P26_BCCN/P26_HE_staining/240624_SF_P26_mDVP_991_HE.ome.tiff" \
+--output "/Volumes/Extreme SSD/P26_BCCN/P26_HE_staining/240624_SF_P26_mDVP_991_HE_pyramid.ome.tiff" \
+--pixel-size 0.354 \
+--tile-size 4288 
 """
