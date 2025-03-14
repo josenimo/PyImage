@@ -45,6 +45,10 @@ def metadata_parse(img):
     omexml = omexml.tostring()
     return omexml
 
+def setup_logger(log_level):
+    logger.remove()
+    logger.add(sys.stdout, format="<green>{time:HH:mm:ss.SS}</green> | <level>{level}</level> | {message}", level=log_level)
+
 def scale_channel_and_write(image_path, output_path, tile_size=1072):
     image = imread.imread(image_path)
     logger.info(f"Image shape: {image.shape} ")
@@ -94,9 +98,7 @@ def scale_channel_and_write(image_path, output_path, tile_size=1072):
 def main():
     args = get_args()
     check_inputs_paths(args)
-    #logging setup
-    logger.remove()
-    logger.add(sys.stdout, format="<green>{time:HH:mm:ss.SS}</green> | <level>{level}</level> | {message}", level=args.loglevel.upper())
+    setup_logger(args.loglevel.upper())
     scale_channel_and_write(args.input, args.output, tile_size=args.tile_size)
     
 if __name__ == "__main__":
