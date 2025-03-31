@@ -10,9 +10,6 @@ import dask.array as da
 from dask_image import imread
 import numpy as np
 
-#TODO it seems that the processing loads the whole image everytime instead of using the previous processed layer
-# processing is actually 90% of processing time, so it can increase time efficiency greatly, especially for large images
-
 def get_args():
     """Get arguments from command line"""
     description = """Script to scale down a .tif image to a lower bit depth using Dask."""
@@ -21,12 +18,13 @@ def get_args():
     inputs.add_argument("-i", "--input",        dest="input",       action="store", required=True, help="File path to input image or folder with images")
     inputs.add_argument("-o", "--output",       dest="output",      action="store", required=True, help="Path to output image or folder.")
     inputs.add_argument("-t", "--tile-size",    dest="tile_size",   action="store", type=int, default=1072, help="Tile size for pyramid generation (must be divisible by 16)")
-    inputs.add_argument("-c", "--compress",     dest="compress",    action="store", default=True, choices=[True, False], help="compresses image bit-depth to 8bit, anything that is not True does not")
+    inputs.add_argument("-c", "--compress",     dest="compress",    action="store", default="True", choices=["True", "False"], help="compresses image bit-depth to 8bit, anything that is not True does not")
     inputs.add_argument("-ll", "--log-level",   dest="loglevel",    action="store", default='INFO', choices=["DEBUG", "INFO"], help='Set the log level (default: INFO)')
 
     arg = parser.parse_args()
     arg.input = os.path.abspath(arg.input)
     arg.output = os.path.abspath(arg.output)
+    arg.compress = arg.compress == "True"
     return arg
 
 def check_inputs_paths(args):
@@ -74,77 +72,19 @@ def check_image(image_path):
 def scale_channel_and_write(image_path, output_path, tile_size=1072, compress_8bit=True):
     image = imread.imread(image_path)
     omexml = metadata_parse(image)
-
-    # Calculate the number of subifds
     subifds = (np.ceil(np.log2(max(1, max(image.shape[-2:]) / tile_size))) + 1).astype(int)
 
     with tifffile.TiffWriter(output_path, bigtiff=True) as tif:
         
         for channel in range(image.shape[0]):
-            
-            channel_array = image[channel,:,:]
-
-            if compress_8bit:
-                logger.info(f"  Processing channel {channel}")
-                channel_array = channel_array.astype(np.float32)
-                channel_array = channel_array - channel_array.min().compute()
-                channel_array = channel_array / channel_array.max().compute()
-                channel_array = channel_array * np.iinfo(np.uint8).max
-                channel_array = channel_array.astype(np.uint8)
-                logger.info(f"  Done processing channel {channel}")
-            
-            tif.write(
-                channel_array.compute(), 
-                description=omexml,
-                metadata=False,
-                subifds=subifds, 
-                tile=(tile_size, tile_size),
-                photometric='minisblack',
-                contiguous=True)
-            omexml = None
-            logger.info(f"  Channel {channel} baselayer written to {output_path}")
-
-            for level in range(subifds):
-                logger.info(f"      Processing level {level} for channel {channel}")
-                res = 2**(level+1)
-                tif.write(
-                    channel_array[::res, ::res].compute(),
-                    subfiletype=1,
-                    metadata=False,
-                    tile=(tile_size, tile_size),
-                    photometric='minisblack')
-                logger.info(f"      Done writing level {level} for channel {channel}")
-
-
-
-
-
-
-
-#CHATGPT
-
-def scale_channel_and_write(image_path, output_path, tile_size=1072, compress_8bit=True):
-    image = imread.imread(image_path)
-    omexml = metadata_parse(image)
-
-    # Calculate the number of subifds
-    subifds = (np.ceil(np.log2(max(1, max(image.shape[-2:]) / tile_size))) + 1).astype(int)
-
-    with tifffile.TiffWriter(output_path, bigtiff=True) as tif:
-        
-        for channel in range(image.shape[0]):
-            
             channel_array = image[channel, :, :]
-
             if compress_8bit:
-                logger.info(f"  Processing channel {channel}")
+                logger.info(f"  Downscaling channel {channel} to 8bit")
                 channel_array = channel_array.astype(np.float32)
                 channel_array = (channel_array - channel_array.min().compute()) / (channel_array.max().compute())
                 channel_array *= np.iinfo(np.uint8).max
                 channel_array = channel_array.astype(np.uint8)
-                logger.info(f"  Done processing channel {channel}")
             
-            # Compute the base layer
             base_layer = channel_array.compute()
             tif.write(
                 base_layer, 
@@ -155,13 +95,11 @@ def scale_channel_and_write(image_path, output_path, tile_size=1072, compress_8b
                 photometric='minisblack',
                 contiguous=True)
             omexml = None
-            logger.info(f"  Channel {channel} baselayer written to {output_path}")
+            logger.info(f"  Channel {channel} written")
 
-            # Downsample progressively
             downsampled = base_layer
             for level in range(subifds):
                 logger.info(f"      Processing level {level} for channel {channel}")
-
                 downsampled = downsampled[::2, ::2]  # Use previously computed downsampled image
                 tif.write(
                     downsampled,
@@ -169,17 +107,6 @@ def scale_channel_and_write(image_path, output_path, tile_size=1072, compress_8b
                     metadata=False,
                     tile=(tile_size, tile_size),
                     photometric='minisblack')
-
-                logger.info(f"      Done writing level {level} for channel {channel}")
-
-#CHATGPT
-
-
-
-
-
-
-
 
 def main():
     args = get_args()
@@ -193,13 +120,19 @@ def main():
     elif file_or_folder == "folder":
         list_of_files = [file for file in os.listdir(args.input) if file.lower().endswith((".tif", ".tiff"))]
         for file in list_of_files:
+            logger.info(f"--- INFO for {file} ---")
             check_image(os.path.join(args.input, file))
         for file in list_of_files:
-            scale_channel_and_write(
-                image_path=os.path.join(args.input, file),
-                output_path=os.path.join(args.output, file),
-                tile_size=args.tile_size,
-                compress_8bit=args.compress)
+            logger.info("")
+            try:
+                logger.info(f"Writing --> {file}")
+                scale_channel_and_write(
+                    image_path=os.path.join(args.input, file),
+                    output_path=os.path.join(args.output, file),
+                    tile_size=args.tile_size,
+                    compress_8bit=args.compress)
+            except:
+                logger.error(f"Could not write {file}, skipping to next one")
 
     
 if __name__ == "__main__":
