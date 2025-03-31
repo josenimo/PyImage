@@ -10,6 +10,9 @@ import dask.array as da
 from dask_image import imread
 import numpy as np
 
+#TODO it seems that the processing loads the whole image everytime instead of using the previous processed layer
+# processing is actually 90% of processing time, so it can increase time efficiency greatly, especially for large images
+
 def get_args():
     """Get arguments from command line"""
     description = """Script to scale down a .tif image to a lower bit depth using Dask."""
